@@ -68,22 +68,23 @@ var getContent = function (filename, self, checker) {
 
         debug('Received tree ' + tree.sha);
 
-        for (var i = 0; i < tree.entries.length; i++) {
-            var entry = tree.entries[i];
-            if (filePath[0] === entry.path) {
-                filePath.shift();
-                if (filePath.length === 0) {
-                    debug('Checking entry for correct type.');
-                    return checker(null, entry);
-                } else {
-                    debug('Recursing tree ' + entry.sha);
-                    return self.repo.getTree(entry.sha, getNext);
-                }
-            }
-        }
+        var foundPath = _.find(tree.entries, function (entry) {
+            return filePath[0] === entry.path;
+        });
 
-        debug('Path entry notfound "' + filename + '"');
-        return checker(new Error('Path entry not found'));
+        if (foundPath) {
+            filePath.shift();
+            if (filePath.length === 0) {
+                debug('Checking entry for correct type.');
+                return checker(null, foundPath);
+            } else {
+                debug('Recursing tree ' + foundPath.sha);
+                return self.repo.getTree(foundPath.sha, getNext);
+            }
+        } else {
+            debug('Path entry notfound "' + filename + '"');
+            return checker(new Error('Path entry not found'));
+        }
     };
 
     debug('Querying ref ' + self.branch);
@@ -123,6 +124,7 @@ GitOrmFs.prototype.readFile = function (filename, callback) {
         if (err) {
             return getData(err);
         }
+
         if (entry instanceof git.Tree || (entry.type && entry.type.isTree)) {
             debug('Entry is not a file, but a directory.');
             getData(new Error('EISDIR'));
@@ -156,6 +158,38 @@ GitOrmFs.prototype.readdir = function (path, callback) {
         } else {
             debug('Entry is not a directory');
             getDir(new Error('ENOTDIR'));
+        }
+    });
+};
+
+GitOrmFs.prototype.read = function (path, callback) {
+    var self = this;
+
+    var getData = function (err, blob) {
+        callback(err, blob ? blob.content : undefined);
+    };
+
+    getContent(path, self, function (err, entry) {
+        if (err) {
+            return getData(err);
+        }
+
+        if (entry instanceof git.Tree || (entry.type && entry.type.isTree)) {
+            debug('Returning file.');
+            self.repo.getTree(entry.sha, function (err, tree) {
+                callback(err, tree ? _.map(tree.entries, function (entry) {
+                    return entry.path;
+                }) : undefined);
+            });
+
+        } else if (entry.type.isBlob) {
+            debug('Returning file.');
+            self.repo.getBlob(entry.sha, function (err, blob) {
+                callback(err, blob ? blob.content : undefined);
+            });
+        } else {
+            debug('Object is neither a tree nor blob.');
+            getData(new Error('Unsupported object type'));
         }
     });
 };
